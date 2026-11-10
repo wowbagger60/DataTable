@@ -1,0 +1,15 @@
+{
+  "id": "{F7BC542C-B248-C8CA-7757-9D468FB64BB0}",
+  "name": "DataTable",
+  "type": 3,
+  "vendor": "Cassanis Automation",
+  "url": "https://github.com/wowbagger60/DataTable/blob/main/DataTable/README.md",
+  "aliases": [
+    "Data Table",
+    "Datentabelle"
+  ],
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "DATAT"
+}

@@ -1,0 +1,534 @@
+{
+    "elements": [
+        {
+            "type": "ValidationTextBox",
+            "name": "Title",
+            "caption": "Title",
+            "width": "400px"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "RecordTitle",
+            "caption": "Record title, e.g. {key-1} - {field-2} (empty = key fields)",
+            "width": "400px"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "SortOrder",
+            "caption": "Sort order, e.g. key-1, -field-2 (- = descending, empty = key fields)",
+            "width": "400px"
+        },
+        {
+            "type": "List",
+            "name": "KeyFields",
+            "caption": "Key fields (order = order in the key)",
+            "rowCount": 4,
+            "add": true,
+            "delete": true,
+            "changeOrder": true,
+            "columns": [
+                {
+                    "caption": "ID",
+                    "name": "ID",
+                    "width": "55px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "enabled": false
+                    }
+                },
+                {
+                    "caption": "Name",
+                    "name": "Name",
+                    "width": "150px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "validate": "^[A-Za-z][A-Za-z0-9_-]*$"
+                    }
+                },
+                {
+                    "caption": "Type",
+                    "name": "Type",
+                    "width": "90px",
+                    "add": "string",
+                    "edit": {
+                        "type": "Select",
+                        "options": [
+                            {
+                                "caption": "String",
+                                "value": "string"
+                            },
+                            {
+                                "caption": "Integer",
+                                "value": "integer"
+                            },
+                            {
+                                "caption": "Float",
+                                "value": "float"
+                            },
+                            {
+                                "caption": "Boolean",
+                                "value": "boolean"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "caption": "Details",
+                    "name": "Details",
+                    "width": "auto",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "enabled": false,
+                        "visible": false
+                    }
+                },
+                {
+                    "caption": "Default value",
+                    "name": "Default",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Label",
+                    "name": "Label",
+                    "width": "170px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    }
+                },
+                {
+                    "caption": "In list",
+                    "name": "List",
+                    "width": "75px",
+                    "add": true,
+                    "edit": {
+                        "type": "CheckBox"
+                    }
+                },
+                {
+                    "caption": "Column title in list",
+                    "name": "ListLabel",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Show advanced settings",
+                    "name": "Advanced",
+                    "width": "80px",
+                    "add": false,
+                    "visible": false,
+                    "edit": {
+                        "type": "CheckBox"
+                    }
+                },
+                {
+                    "caption": "Display",
+                    "name": "Format",
+                    "width": "80px",
+                    "add": "line",
+                    "edit": {
+                        "type": "Select",
+                        "options": [
+                            {
+                                "caption": "Single line",
+                                "value": "line"
+                            },
+                            {
+                                "caption": "Date",
+                                "value": "date"
+                            }
+                        ],
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Options (value=Label; …) – makes the field a selection",
+                    "name": "Options",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Minimum",
+                    "name": "Min",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Maximum",
+                    "name": "Max",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Decimals",
+                    "name": "Digits",
+                    "width": "80px",
+                    "add": 2,
+                    "edit": {
+                        "type": "NumberSpinner",
+                        "minimum": 0,
+                        "maximum": 6,
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Prefix",
+                    "name": "Prefix",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Suffix",
+                    "name": "Suffix",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Case-sensitive key",
+                    "name": "CaseSensitive",
+                    "width": "80px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Filter in list",
+                    "name": "Filter",
+                    "width": "80px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox",
+                        "visible": false
+                    },
+                    "visible": false
+                }
+            ]
+        },
+        {
+            "type": "List",
+            "name": "DataFields",
+            "caption": "Data fields",
+            "rowCount": 10,
+            "add": true,
+            "delete": true,
+            "changeOrder": true,
+            "columns": [
+                {
+                    "caption": "ID",
+                    "name": "ID",
+                    "width": "55px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "enabled": false
+                    }
+                },
+                {
+                    "caption": "Name",
+                    "name": "Name",
+                    "width": "150px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "validate": "^[A-Za-z][A-Za-z0-9_-]*$"
+                    }
+                },
+                {
+                    "caption": "Type",
+                    "name": "Type",
+                    "width": "90px",
+                    "add": "string",
+                    "edit": {
+                        "type": "Select",
+                        "options": [
+                            {
+                                "caption": "String",
+                                "value": "string"
+                            },
+                            {
+                                "caption": "Integer",
+                                "value": "integer"
+                            },
+                            {
+                                "caption": "Float",
+                                "value": "float"
+                            },
+                            {
+                                "caption": "Boolean",
+                                "value": "boolean"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "caption": "Details",
+                    "name": "Details",
+                    "width": "auto",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "enabled": false,
+                        "visible": false
+                    }
+                },
+                {
+                    "caption": "Required",
+                    "name": "Required",
+                    "width": "75px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox"
+                    }
+                },
+                {
+                    "caption": "Default value",
+                    "name": "Default",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Label",
+                    "name": "Label",
+                    "width": "170px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    }
+                },
+                {
+                    "caption": "Tab",
+                    "name": "Tab",
+                    "width": "110px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    }
+                },
+                {
+                    "caption": "Separator above",
+                    "name": "Separator",
+                    "width": "80px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox"
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "In list",
+                    "name": "List",
+                    "width": "75px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox"
+                    }
+                },
+                {
+                    "caption": "Column title in list",
+                    "name": "ListLabel",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox"
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Show advanced settings",
+                    "name": "Advanced",
+                    "width": "80px",
+                    "add": false,
+                    "visible": false,
+                    "edit": {
+                        "type": "CheckBox"
+                    }
+                },
+                {
+                    "caption": "Display",
+                    "name": "Format",
+                    "width": "80px",
+                    "add": "line",
+                    "edit": {
+                        "type": "Select",
+                        "options": [
+                            {
+                                "caption": "Single line",
+                                "value": "line"
+                            },
+                            {
+                                "caption": "Multi-line",
+                                "value": "multiline"
+                            },
+                            {
+                                "caption": "Date",
+                                "value": "date"
+                            }
+                        ],
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Lines",
+                    "name": "Rows",
+                    "width": "80px",
+                    "add": 3,
+                    "edit": {
+                        "type": "NumberSpinner",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Options (value=Label; …) – makes the field a selection",
+                    "name": "Options",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Minimum",
+                    "name": "Min",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Maximum",
+                    "name": "Max",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Decimals",
+                    "name": "Digits",
+                    "width": "80px",
+                    "add": 2,
+                    "edit": {
+                        "type": "NumberSpinner",
+                        "minimum": 0,
+                        "maximum": 6,
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Prefix",
+                    "name": "Prefix",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Suffix",
+                    "name": "Suffix",
+                    "width": "80px",
+                    "add": "",
+                    "edit": {
+                        "type": "ValidationTextBox",
+                        "visible": false
+                    },
+                    "visible": false
+                },
+                {
+                    "caption": "Filter in list",
+                    "name": "Filter",
+                    "width": "80px",
+                    "add": false,
+                    "edit": {
+                        "type": "CheckBox",
+                        "visible": false
+                    },
+                    "visible": false
+                }
+            ]
+        },
+        {
+            "type": "Label",
+            "caption": "The edit dialog shows the general settings; \"Show advanced settings\" or choosing a type adds the settings that apply to the type. To move a field between key and data fields, delete it in one list and add it with the same name in the other: its values are kept."
+        }
+    ],
+    "actions": [],
+    "status": [
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Field definition is invalid"
+        },
+        {
+            "code": 202,
+            "icon": "inactive",
+            "caption": "No fields defined yet"
+        },
+        {
+            "code": 203,
+            "icon": "error",
+            "caption": "Data does not match the new field definition"
+        }
+    ]
+}
