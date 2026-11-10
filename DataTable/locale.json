@@ -17,6 +17,10 @@
             "Column title in list": "Spaltentitel in der Liste",
             "Default value": "Standardwert",
             "Separator above": "Trennlinie oberhalb",
+            "Edit form": "Eingabemaske",
+            "Editable": "Editierbar",
+            "Read only": "Nur lesen",
+            "Hidden": "Versteckt",
             "Field definition is invalid": "Felddefinition ist ungültig",
             "No fields defined yet": "Noch keine Felder definiert",
             "Data does not match the new field definition": "Daten passen nicht zur neuen Felddefinition",
@@ -128,7 +132,16 @@
             "“{0}” will be deleted permanently.": "„{0}“ wird endgültig gelöscht.",
             "Discard new record?": "Neuen Datensatz verwerfen?",
             "Discard changes?": "Änderungen verwerfen?",
-            "The input will be lost.": "Die Eingaben gehen verloren."
+            "The input will be lost.": "Die Eingaben gehen verloren.",
+            "the key %s occurs more than once.": "der Schlüssel %s kommt mehrfach vor.",
+            "not an array.": "kein Array.",
+            "Unknown field: %s": "Unbekanntes Feld: %s",
+            "Key field missing: %s": "Schlüsselfeld fehlt: %s",
+            "Record not found.": "Datensatz nicht gefunden.",
+            "Record %d: ": "Datensatz %d: ",
+            "Data revision": "Datenrevision",
+            "Loading…": "Wird geladen…",
+            "Show {0} more": "{0} weitere anzeigen"
         }
     }
 }

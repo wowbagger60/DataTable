@@ -342,6 +342,21 @@
                     }
                 },
                 {
+                    "caption": "Edit form",
+                    "name": "Form",
+                    "width": "100px",
+                    "add": "edit",
+                    "edit": {
+                        "type": "Select",
+                        "options": [
+                            { "caption": "Editable", "value": "edit" },
+                            { "caption": "Read only", "value": "read" },
+                            { "caption": "Hidden", "value": "hidden" }
+                        ]
+                    },
+                    "visible": false
+                },
+                {
                     "caption": "Tab",
                     "name": "Tab",
                     "width": "110px",

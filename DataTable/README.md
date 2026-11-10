@@ -5,8 +5,8 @@
 Module for the IP-Symcon tile visualization by Ueli Schweizer / Cassanis Automation.
 Prefix: `DATAT`.
 
-DataTable manages a small structured data set, for example info texts,
-employees or absences. The fields are defined in the instance configuration;
+DataTable manages a small structured data set, for example customer data,
+a birthday list or a vehicle logbook. The fields are defined in the instance configuration;
 the records are edited in an HTML tile. Several clients can work at the same
 time.
 
@@ -60,6 +60,7 @@ renamed without losing data.
 | Required | Data fields only: the field must not be empty. Key fields are always required. |
 | Default value | Value of a new record. Boolean: `true`/`false` (also `1`/`0`, `yes`/`no`, `on`/`off`). |
 | Label | Text in the tile. Empty: the name. |
+| Edit form | Data fields only: «Editable», «Read only» or «Hidden». Read-only and hidden fields are meant for values set by a script, e.g. statistics or generated values; the tile shows a read-only field but does not change it, a hidden field is not shown in the record (it can still be a list column). Saving from the tile keeps their stored value; new records from the tile get the default value, and «Required» is not checked there. |
 | Tab | Data fields only: fields with the same tab are shown together. |
 | Separator above | Data fields only: line above the field |
 | In list | The field is a column in the list. Without any list field, the key fields are shown. |
@@ -98,12 +99,13 @@ with the same name in the other. Its values are kept.
 
 **Record title:** the title of a record in the tile, in the delete
 confirmation and in «Copy of …». Fields are inserted with `{name}`, for example
-`{lastname} {firstname} ({pnr})`. Unknown placeholders are shown as text, so a
+`{lastname} {firstname} ({customer-no})`. Unknown placeholders are shown as text, so a
 typing error is visible. Empty: the values of the key fields, separated by
 « · ».
 
-**Sort order:** field names separated by commas, e.g. `chapter, order, tag`. A
-`-` before the name sorts descending: `-from, employee`. Any field can be used.
+**Sort order:** the order of the list in the tile; it does not affect the
+stored data or the script functions. Field names separated by commas, e.g.
+`city, lastname`. A `-` before the name sorts descending: `-date, vehicle`. Any field can be used.
 The key fields not listed are appended in ascending order, so the order is
 always unique. Empty: the key fields, ascending. An unknown name puts the
 instance into error state.
@@ -123,7 +125,8 @@ The layout follows the size of the tile:
 
 Functions:
 
-- Search in the list columns and in all text fields.
+- Search in the list columns and in all text fields that are not hidden.
+- The list shows 200 rows at first; «Show 200 more» adds further rows.
 - Filter by the filter field. «New» takes over the selected filter value.
 - New, copy, delete; previous and next record within the current list.
 - Save with «Save» or Ctrl+S / Cmd+S. Unsaved input is not discarded
@@ -133,6 +136,8 @@ Several clients can edit at the same time. Each saved record has a revision. If
 a record has been changed or deleted by another client in the meantime,
 saving is not performed silently: the tile offers to reload, overwrite or
 recreate the record.
+If a script changes only read-only or hidden fields, this is not a conflict:
+the tile takes over the new values and keeps the input in the editable fields.
 
 The tile uses the colors of the visualization, including dark mode. Texts
 follow the IP-Symcon language (English, German). Numbers and dates are shown in
@@ -161,20 +166,73 @@ field.
 
 ## 7. Script functions
 
+All functions return an array with at least `Status` and `Message`.
+`Status === 0` means success; otherwise `Message` describes the reason. Fields
+are addressed by name (upper and lower case do not matter). Values are checked
+and converted as in the tile: type, required, minimum/maximum and options.
+
 ```php
-$records = DATAT_Export($id);
+$r = DATAT_AddRecord($id, ['customer-no' => 1042, 'name' => 'Muster', 'city' => 'ZH']);
+$key = $r['Key'];
+
+$r = DATAT_GetRecord($id, ['customer-no' => 1042]);
+if ($r['Status'] === 0) {
+    $record = $r['Record'];          // ['customer-no' => 1042, 'name' => 'Muster', ...]
+}
+
+$r = DATAT_ModifyRecord($id, ['customer-no' => 1042, 'city' => 'BE']);
+$r = DATAT_ModifyRecord($id, ['customer-no' => 1043], $key);   // change the key
+$r = DATAT_DeleteRecord($id, ['customer-no' => 1043]);
 ```
 
-Returns all records as an array. The array key is the internal key of the
-record; each record contains the values by field name. Values have the type of
-the field; dates are strings `YYYY-MM-DD`, empty numbers are `null`.
+| Function | Result |
+|---|---|
+| `DATAT_GetRecord($id, $KeyValues)` | `Key`, `Record` (`false` if not found) |
+| `DATAT_AddRecord($id, $Record)` | `Key`. Fields not given get their default value. |
+| `DATAT_ModifyRecord($id, $Changes, $OriginalKey = '')` | `Key` (the new one). Only the given fields change. |
+| `DATAT_DeleteRecord($id, $KeyValues)` | – |
+| `DATAT_Export($id)` | `Records`: internal key => record |
+| `DATAT_Import($id, $Records)` | `Added`, `Updated`, `Unchanged` |
 
-The export always returns all records, regardless of a filter in the tile.
+`ModifyRecord()` finds the record by `$OriginalKey`, the internal key from
+`Key`, or, if it is empty, by the key fields in `$Changes`. With
+`$OriginalKey`, key fields can be changed as well.
+
+`Export()` always returns all records, regardless of a filter in the tile.
+Values have the type of the field; dates are strings `YYYY-MM-DD`, empty numbers
+are `null`.
+
+`Import()` is an atomic merge: new records are added, existing records with the
+same key get the given fields, identical records are left alone. Records not
+contained in the import are never deleted. If one record is invalid, nothing is
+imported and `Message` names the record. The `Records` of `DATAT_Export()` and
+of `RECM_Export()` can be imported directly, provided the field names match.
+
+Every change is shown immediately in all open tiles.
+
+| Status | Meaning |
+|---:|---|
+| 0 | OK |
+| 1 | Invalid configuration |
+| 2 | Key field missing or empty |
+| 3 | Invalid value (type, range or option) |
+| 4 | Record not found |
+| 5 | Key already exists |
+| 6 | Unknown field |
+| 7 | Required field empty |
+| 10 | Data store locked |
+| 12 | Invalid import data |
+| 13 | Duplicate key in the import |
+
+The integer variable `DataRevision` below the instance is increased by one
+whenever the stored data changes, from the tile, from a script or by a change
+of the field definition. An event on this variable reacts to every change.
 
 ## 8. Limits
 
 The records are stored in the instance as one JSON value; every save writes it
-completely, and the tile receives the whole table. Several thousand records
+completely, and the tile receives the whole table (in parts, because Symcon
+limits a single tile message to 1 MB). Several thousand records
 work well; the practical limit depends on the length of the records and on the
 device showing the tile. DataTable is not a replacement for a database.
 

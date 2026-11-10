@@ -34,8 +34,23 @@
 class DataTable extends IPSModuleStrict
 {
     private const LOCK_TIMEOUT = 5000;
+    private const CHUNK_BYTES = 262144;    // records per tile message, well below Symcon's 1 MB
     private const TYPES = ['string', 'integer', 'float', 'boolean'];
     private const FORMATS = ['line', 'multiline', 'date'];
+
+    // Result status of the script functions (numbering as in RecordManager).
+    private const ST_OK = 0;
+    private const ST_CONFIG = 1;
+    private const ST_KEY_MISSING = 2;
+    private const ST_INVALID = 3;
+    private const ST_NOT_FOUND = 4;
+    private const ST_DUPLICATE = 5;
+    private const ST_UNKNOWN_FIELD = 6;
+    private const ST_REQUIRED = 7;
+    private const ST_LOCK = 10;
+    private const ST_IMPORT_INVALID = 12;
+    private const ST_IMPORT_DUPLICATE = 13;
+    private const ST_CONFLICT = 15;     // tile only: record changed by another client
 
     private const STATUS_INVALID_FIELDS = 201;
     private const STATUS_NO_FIELDS = 202;
@@ -44,13 +59,14 @@ class DataTable extends IPSModuleStrict
     /** Columns of a field row and their defaults. */
     private const ROW_DEFAULTS = [
         'ID' => '', 'Name' => '', 'Label' => '', 'Type' => 'string', 'Format' => 'line', 'Details' => '',
-        'List' => false, 'Required' => false, 'Tab' => '', 'Separator' => false, 'ListLabel' => '',
+        'List' => false, 'Required' => false, 'Tab' => '', 'Separator' => false, 'Form' => 'edit', 'ListLabel' => '',
         'Default' => '', 'Options' => '', 'Prefix' => '', 'Suffix' => '', 'Digits' => 2, 'Min' => '', 'Max' => '', 'Rows' => 3,
         'CaseSensitive' => false, 'Filter' => false, 'Advanced' => false
     ];
 
     /** Texts of the tile (English); sent translated with every full message. */
     private const TILE_TEXTS = [
+        'Loading…', 'Show {0} more',
         'Back', 'Back to list', 'Cancel', 'Changed', 'Conflict', 'Copy',
         'Copy created – adjust the key and save', 'Copy of {0}', 'Create again',
         'Create it again with your changes?', 'Delete', 'Delete anyway', 'Delete record?', 'Deleted',
@@ -82,6 +98,9 @@ class DataTable extends IPSModuleStrict
         $this->RegisterAttributeString('Schema', '');        // schema the stored data follows
         $this->RegisterAttributeString('ConfigError', '');
         $this->RegisterAttributeInteger('NextFieldID', 1);
+
+        // Increased by one whenever the stored data changes (tile, script or migration).
+        $this->RegisterVariableInteger('DataRevision', $this->Translate('Data revision'), '', 0);
 
         $this->SetVisualizationType($this->VisualizationType());
     }
@@ -152,7 +171,7 @@ class DataTable extends IPSModuleStrict
 
         $this->WriteAttributeString('ConfigError', '');
         $this->SetStatus(IS_ACTIVE);
-        $this->Broadcast($this->BuildFullMessage(null));
+        $this->SendFull(null);
     }
 
     public function GetConfigurationForm(): string
@@ -199,8 +218,15 @@ class DataTable extends IPSModuleStrict
         if ($Html === false) {
             return '';
         }
+        // Symcon limits the tile output to 1 MB. A large table is therefore not
+        // embedded; the tile requests it ('reload') and receives it in parts.
         $Flags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE;
-        $Message = json_encode($this->BuildFullMessage(null), $Flags);
+        $Messages = $this->FullMessages(null);
+        if (count($Messages) > 1) {
+            $Messages[0]['records'] = [];
+            $Messages[0]['parts'] = -1;
+        }
+        $Message = json_encode($Messages[0], $Flags);
         return str_replace(
             '</body>',
             '<script>handleMessage(' . json_encode($Message !== false ? $Message : '{}', $Flags) . ');</script></body>',
@@ -226,22 +252,217 @@ class DataTable extends IPSModuleStrict
     // Public API
     // ---------------------------------------------------------------------
 
-    /** Returns all records keyed by the internal key; values keyed by field name. */
+    /**
+     * Returns the record with the given key values (by field name).
+     * Result: Status, Message, Key (internal key or ''), Record (by field name, or false).
+     */
+    public function GetRecord(array $KeyValues): array
+    {
+        $Empty = ['Key' => '', 'Record' => false];
+        $Schema = $this->GetActiveSchema();
+        if ($Schema === null) {
+            return $this->Result(self::ST_CONFIG, $Empty);
+        }
+        [$Key, $Status, $Message] = $this->KeyFromNames($Schema, $KeyValues);
+        if ($Status !== self::ST_OK) {
+            return $this->Result($Status, $Empty, $Message);
+        }
+        $Data = $this->ReadData();
+        if (!isset($Data[$Key])) {
+            return $this->Result(self::ST_NOT_FOUND, $Empty);
+        }
+        return $this->Result(self::ST_OK, ['Key' => $Key, 'Record' => $this->RecordByName($Schema, $Data[$Key]['v'])]);
+    }
+
+    /**
+     * Adds a record. Fields that are not given get their default value.
+     * Result: Status, Message, Key.
+     */
+    public function AddRecord(array $Record): array
+    {
+        $Schema = $this->GetActiveSchema();
+        if ($Schema === null) {
+            return $this->Result(self::ST_CONFIG, ['Key' => '']);
+        }
+        [$Input, $Status, $Message] = $this->InputByID($Schema, $Record);
+        if ($Status === self::ST_OK) {
+            [$Values, $Status, $Message] = $this->CheckValues($Schema, $Input, array_keys($Input));
+        }
+        if ($Status !== self::ST_OK) {
+            return $this->Result($Status, ['Key' => ''], $Message);
+        }
+        if (!$this->Lock()) {
+            return $this->Result(self::ST_LOCK, ['Key' => '']);
+        }
+        try {
+            $Data = $this->ReadData();
+            [$Status, $Key, $Entry] = $this->StoreRecord($Data, null, $Values, $Schema, null);
+            if ($Status !== self::ST_OK) {
+                return $this->Result($Status, ['Key' => '']);
+            }
+            $this->WriteData($Data);
+        } finally {
+            $this->Unlock();
+        }
+        $this->BroadcastSaved(null, $Key, $Entry);
+        return $this->Result(self::ST_OK, ['Key' => $Key]);
+    }
+
+    /**
+     * Changes the given fields of a record; other fields stay unchanged. The
+     * record is found by $OriginalKey (internal key, e.g. from GetRecord) or,
+     * if that is empty, by the key fields contained in $Changes. With
+     * $OriginalKey, key fields can be changed as well.
+     * Result: Status, Message, Key (the new internal key).
+     */
+    public function ModifyRecord(array $Changes, string $OriginalKey = ''): array
+    {
+        $Schema = $this->GetActiveSchema();
+        if ($Schema === null) {
+            return $this->Result(self::ST_CONFIG, ['Key' => '']);
+        }
+        [$Input, $Status, $Message] = $this->InputByID($Schema, $Changes);
+        if ($Status === self::ST_OK && $OriginalKey === '') {
+            [$OriginalKey, $Status, $Message] = $this->KeyFromNames($Schema, $Changes);
+        }
+        if ($Status !== self::ST_OK) {
+            return $this->Result($Status, ['Key' => ''], $Message);
+        }
+        if (!$this->Lock()) {
+            return $this->Result(self::ST_LOCK, ['Key' => '']);
+        }
+        try {
+            $Data = $this->ReadData();
+            if (!isset($Data[$OriginalKey])) {
+                return $this->Result(self::ST_NOT_FOUND, ['Key' => '']);
+            }
+            [$Values, $Status, $Message] = $this->CheckValues($Schema, $Input + $Data[$OriginalKey]['v'], array_keys($Input));
+            if ($Status !== self::ST_OK) {
+                return $this->Result($Status, ['Key' => ''], $Message);
+            }
+            if ($this->BuildKey($Values, $Schema) === $OriginalKey && $this->SameValues($Values + $Data[$OriginalKey]['v'], $Data[$OriginalKey]['v'])) {
+                return $this->Result(self::ST_OK, ['Key' => $OriginalKey]);
+            }
+            [$Status, $Key, $Entry] = $this->StoreRecord($Data, $OriginalKey, $Values, $Schema, null);
+            if ($Status !== self::ST_OK) {
+                return $this->Result($Status, ['Key' => '']);
+            }
+            $this->WriteData($Data);
+        } finally {
+            $this->Unlock();
+        }
+        $this->BroadcastSaved($OriginalKey, $Key, $Entry);
+        return $this->Result(self::ST_OK, ['Key' => $Key]);
+    }
+
+    /** Deletes the record with the given key values (by field name). Result: Status, Message. */
+    public function DeleteRecord(array $KeyValues): array
+    {
+        $Schema = $this->GetActiveSchema();
+        if ($Schema === null) {
+            return $this->Result(self::ST_CONFIG);
+        }
+        [$Key, $Status, $Message] = $this->KeyFromNames($Schema, $KeyValues);
+        if ($Status !== self::ST_OK) {
+            return $this->Result($Status, [], $Message);
+        }
+        if (!$this->Lock()) {
+            return $this->Result(self::ST_LOCK);
+        }
+        try {
+            $Data = $this->ReadData();
+            if (!isset($Data[$Key])) {
+                return $this->Result(self::ST_NOT_FOUND);
+            }
+            unset($Data[$Key]);
+            $this->WriteData($Data);
+        } finally {
+            $this->Unlock();
+        }
+        $this->Broadcast(['t' => 'changed', 'c' => null, 'r' => 0, 'op' => 'delete', 'old' => $Key, 'key' => null, 'rec' => null]);
+        return $this->Result(self::ST_OK);
+    }
+
+    /**
+     * Returns all records. Result: Status, Message, Records (internal key =>
+     * record by field name). Always all records, regardless of a tile filter.
+     */
     public function Export(): array
     {
         $Schema = $this->GetActiveSchema();
         if ($Schema === null) {
-            return [];
+            return $this->Result(self::ST_CONFIG, ['Records' => []]);
         }
         $Records = [];
         foreach ($this->ReadData() as $Key => $Entry) {
-            $Record = [];
-            foreach ($Schema['fields'] as $Field) {
-                $Record[$Field['name']] = $Entry['v'][$Field['id']] ?? null;
-            }
-            $Records[(string)$Key] = $Record;
+            $Records[(string)$Key] = $this->RecordByName($Schema, $Entry['v']);
         }
-        return $Records;
+        return $this->Result(self::ST_OK, ['Records' => $Records]);
+    }
+
+    /**
+     * Atomic merge: new records are added, existing ones (same key) get the
+     * given fields, identical ones are left alone. Records not contained are
+     * never deleted. Either all records are imported or none.
+     * Accepts the Records of Export() here and of RECM_Export().
+     * Result: Status, Message, Added, Updated, Unchanged.
+     */
+    public function Import(array $Records): array
+    {
+        $Counts = $None = ['Added' => 0, 'Updated' => 0, 'Unchanged' => 0];
+        $Schema = $this->GetActiveSchema();
+        if ($Schema === null) {
+            return $this->Result(self::ST_CONFIG, $None);
+        }
+        if (!$this->Lock()) {
+            return $this->Result(self::ST_LOCK, $None);
+        }
+        try {
+            $Data = $this->ReadData();
+            $Seen = [];
+            $Number = 0;
+            foreach ($Records as $Record) {
+                $Number++;
+                $Where = sprintf($this->Translate('Record %d: '), $Number);
+                if (!is_array($Record)) {
+                    return $this->Result(self::ST_IMPORT_INVALID, $None, $Where . $this->Translate('not an array.'));
+                }
+                [$Input, $Status, $Message] = $this->InputByID($Schema, $Record);
+                if ($Status === self::ST_OK) {
+                    [$Key, $Status, $Message] = $this->KeyFromNames($Schema, $Record);
+                }
+                if ($Status !== self::ST_OK) {
+                    return $this->Result($Status, $None, $Where . $Message);
+                }
+                if (isset($Seen[$Key])) {
+                    return $this->Result(self::ST_IMPORT_DUPLICATE, $None, $Where . sprintf($this->Translate('the key %s occurs more than once.'), str_replace("\t", ' / ', $Key)));
+                }
+                $Seen[$Key] = true;
+                $Old = $Data[$Key]['v'] ?? null;
+                [$Values, $Status, $Message] = $this->CheckValues($Schema, $Old === null ? $Input : $Input + $Old, array_keys($Input));
+                if ($Status !== self::ST_OK) {
+                    return $this->Result($Status, $None, $Where . $Message);
+                }
+                if ($Old === null) {
+                    $Data[$Key] = ['rev' => 1, 'v' => $Values];
+                    $Counts['Added']++;
+                } elseif ($this->SameValues($Values + $Old, $Old)) {
+                    $Counts['Unchanged']++;
+                } else {
+                    $Data[$Key] = ['rev' => (int)$Data[$Key]['rev'] + 1, 'v' => $Values + $Old];
+                    $Counts['Updated']++;
+                }
+            }
+            if ($Counts['Added'] + $Counts['Updated'] > 0) {
+                $this->WriteData($Data);
+            }
+        } finally {
+            $this->Unlock();
+        }
+        if ($Counts['Added'] + $Counts['Updated'] > 0) {
+            $this->SendFull(null);
+        }
+        return $this->Result(self::ST_OK, $Counts);
     }
 
     // ---------------------------------------------------------------------
@@ -260,7 +481,7 @@ class DataTable extends IPSModuleStrict
 
         $Op = (string)($Request['op'] ?? '');
         if ($Op === 'reload') {
-            $this->Broadcast($this->BuildFullMessage($Client));
+            $this->SendFull($Client);
             return;
         }
         if ($this->GetActiveSchema() === null) {
@@ -283,31 +504,29 @@ class DataTable extends IPSModuleStrict
     {
         $Schema = $this->GetActiveSchema();
         $Input = is_array($Request['values'] ?? null) ? $Request['values'] : [];
-
-        $Values = [];
+        // Read-only and hidden fields keep their stored value (new records: default).
+        $Editable = $Hidden = [];
         foreach ($Schema['fields'] as $Field) {
-            $Raw = array_key_exists($Field['id'], $Input) ? $Input[$Field['id']] : $Field['default'];
-            [$Ok, $Value] = $this->CastValue($Field, $Raw);
-            if (!$Ok) {
-                $this->SendError($Client, $RequestID, 'invalid', sprintf($this->Translate('Invalid value in field %s'), $Field['label']));
-                return;
+            if ($Field['form'] === 'edit') {
+                $Editable[] = $Field['id'];
+            } else {
+                $Hidden[] = $Field['id'];
             }
-            if (($Field['required'] || $Field['key'] !== null) && $this->IsEmptyValue($Field, $Value)) {
-                $this->SendError($Client, $RequestID, 'required', sprintf($this->Translate('Required field is empty: %s'), $Field['label']));
-                return;
-            }
-            if ((is_int($Value) || is_float($Value))
-                && (($Field['min'] !== null && $Value < $Field['min']) || ($Field['max'] !== null && $Value > $Field['max']))) {
-                $this->SendError($Client, $RequestID, 'invalid', sprintf($this->Translate('Value out of range in field %s'), $Field['label']));
-                return;
-            }
-            $Values[$Field['id']] = $Value;
+        }
+        $Input = array_intersect_key($Input, array_flip($Editable));
+
+        // The tile may keep an option value that was removed meanwhile, so options are not enforced here.
+        [$Values, $Status, $Message] = $this->CheckValues($Schema, $Input, [], $Hidden);
+        if ($Status !== self::ST_OK) {
+            $this->SendError($Client, $RequestID, $Status === self::ST_REQUIRED ? 'required' : 'invalid', $Message);
+            return;
         }
 
-        $NewKey = $this->BuildKey($Values, $Schema);
         $Original = isset($Request['key']) && $Request['key'] !== null ? (string)$Request['key'] : null;
-        $BaseRev = (int)($Request['rev'] ?? 0);
-        $Force = !empty($Request['force']);
+        $BaseRev = !empty($Request['force']) ? null : (int)($Request['rev'] ?? 0);
+        if ($Original !== null) {
+            $Values = array_diff_key($Values, array_flip($Hidden));
+        }
 
         if (!$this->Lock()) {
             $this->SendError($Client, $RequestID, 'lock', $this->Translate('Data store is locked.'));
@@ -315,43 +534,29 @@ class DataTable extends IPSModuleStrict
         }
         try {
             $Data = $this->ReadData();
-            if ($Original !== null) {
-                if (!isset($Data[$Original])) {
+            // A change of read-only or hidden fields only (e.g. by a script) is no conflict.
+            if ($BaseRev !== null && $Original !== null && isset($Data[$Original]) && (int)$Data[$Original]['rev'] !== $BaseRev
+                && is_array($Request['base'] ?? null) && $this->SameEditable($Schema, $Editable, $Request['base'], $Data[$Original]['v'])) {
+                $BaseRev = null;
+            }
+            [$Status, $Key, $Entry] = $this->StoreRecord($Data, $Original, $Values, $Schema, $BaseRev);
+            switch ($Status) {
+                case self::ST_NOT_FOUND:
                     $this->SendError($Client, $RequestID, 'notfound', $this->Translate('The record has been deleted in the meantime.'));
                     return;
-                }
-                if (!$Force && (int)$Data[$Original]['rev'] !== $BaseRev) {
+                case self::ST_CONFLICT:
                     $this->SendError($Client, $RequestID, 'conflict', $this->Translate('The record has been changed by another client in the meantime.'),
                         $this->RecordMessagePart($Original, $Data[$Original]));
                     return;
-                }
-                // Keep values of fields that were removed from the definition.
-                $Values += $Data[$Original]['v'];
+                case self::ST_DUPLICATE:
+                    $this->SendError($Client, $RequestID, 'duplicate', $this->Translate('A record with this key already exists.'));
+                    return;
             }
-            if ($NewKey !== $Original && isset($Data[$NewKey])) {
-                $this->SendError($Client, $RequestID, 'duplicate', $this->Translate('A record with this key already exists.'));
-                return;
-            }
-
-            $Rev = $Original !== null ? (int)$Data[$Original]['rev'] + 1 : 1;
-            if ($Original !== null) {
-                unset($Data[$Original]);
-            }
-            $Data[$NewKey] = ['rev' => $Rev, 'v' => $Values];
             $this->WriteData($Data);
         } finally {
             $this->Unlock();
         }
-
-        $this->Broadcast([
-            't'   => 'changed',
-            'c'   => $Client,
-            'r'   => $RequestID,
-            'op'  => 'save',
-            'old' => $Original,
-            'key' => $NewKey,
-            'rec' => $this->RecordMessagePart($NewKey, ['rev' => $Rev, 'v' => $Values])
-        ]);
+        $this->BroadcastSaved($Original, $Key, $Entry, $Client, $RequestID);
     }
 
     private function HandleDelete(string $Client, int $RequestID, array $Request): void
@@ -459,6 +664,9 @@ class DataTable extends IPSModuleStrict
         }
         if ($Row['Default'] !== '') {
             $Parts[] = $this->Translate('Default') . ' ' . $Row['Default'];
+        }
+        if ($Row['Form'] === 'read' || $Row['Form'] === 'hidden') {
+            $Parts[] = $this->Translate($Row['Form'] === 'read' ? 'Read only' : 'Hidden');
         }
         if ($Row['Filter'] && ($Row['Type'] === 'boolean' || (count($Options) > 0 && $Row['Type'] !== 'float'))) {
             $Parts[] = $this->Translate('Filter');
@@ -595,6 +803,7 @@ class DataTable extends IPSModuleStrict
                 'required'      => $KeyPos === null && !empty($Row['Required']),
                 'list'          => !empty($Row['List']),
                 'separator'     => $KeyPos === null && !empty($Row['Separator']),
+                'form'          => $KeyPos === null && in_array($Row['Form'], ['read', 'hidden'], true) ? (string)$Row['Form'] : 'edit',
                 'tab'           => $KeyPos === null ? trim((string)$Row['Tab']) : '',
                 'listLabel'     => trim((string)$Row['ListLabel']),
                 'prefix'        => in_array($Store, ['integer', 'float'], true) ? trim((string)$Row['Prefix']) : '',
@@ -749,7 +958,7 @@ class DataTable extends IPSModuleStrict
         $this->WriteAttributeString('ConfigError', $Message);
         $this->SetStatus($Status);
         $this->SendDebug('Configuration', $Message, 0);
-        $this->Broadcast($this->BuildFullMessage(null));
+        $this->SendFull(null);
     }
 
     // ---------------------------------------------------------------------
@@ -815,6 +1024,141 @@ class DataTable extends IPSModuleStrict
                 }
                 return [true, $Value];
         }
+    }
+
+    /**
+     * Checks and converts a complete set of values (by field ID; missing
+     * fields get their default). Options are enforced for the fields in
+     * $StrictIDs only; fields in $OptionalIDs may be empty even if required.
+     * Returns [values, ST_OK, ''] or [null, status, message].
+     */
+    private function CheckValues(array $Schema, array $Raw, array $StrictIDs, array $OptionalIDs = []): array
+    {
+        $Strict = array_flip($StrictIDs);
+        $Optional = array_flip($OptionalIDs);
+        $Values = [];
+        foreach ($Schema['fields'] as $Field) {
+            $Input = array_key_exists($Field['id'], $Raw) ? $Raw[$Field['id']] : $Field['default'];
+            [$Ok, $Value] = $this->CastValue($Field, $Input);
+            if (!$Ok) {
+                return [null, self::ST_INVALID, sprintf($this->Translate('Invalid value in field %s'), $Field['label'])];
+            }
+            if (($Field['required'] || $Field['key'] !== null) && !isset($Optional[$Field['id']]) && $this->IsEmptyValue($Field, $Value)) {
+                return [null, self::ST_REQUIRED, sprintf($this->Translate('Required field is empty: %s'), $Field['label'])];
+            }
+            if ((is_int($Value) || is_float($Value))
+                && (($Field['min'] !== null && $Value < $Field['min']) || ($Field['max'] !== null && $Value > $Field['max']))) {
+                return [null, self::ST_INVALID, sprintf($this->Translate('Value out of range in field %s'), $Field['label'])];
+            }
+            if (isset($Strict[$Field['id']]) && count($Field['options']) > 0 && !$this->IsEmptyValue($Field, $Value)
+                && !in_array($Value, array_column($Field['options'], 'value'), true)) {
+                return [null, self::ST_INVALID, sprintf($this->Translate('Invalid value in field %s'), $Field['label'])];
+            }
+            $Values[$Field['id']] = $Value;
+        }
+        return [$Values, self::ST_OK, ''];
+    }
+
+    /**
+     * Stores a record in $Data (caller holds the lock and writes the data).
+     * $BaseRev: expected revision of the original record, null = no check.
+     * Values of fields removed from the definition are kept.
+     * Returns [status, new key, entry].
+     */
+    private function StoreRecord(array &$Data, ?string $Original, array $Values, array $Schema, ?int $BaseRev): array
+    {
+        if ($Original !== null) {
+            if (!isset($Data[$Original])) {
+                return [self::ST_NOT_FOUND, '', null];
+            }
+            if ($BaseRev !== null && (int)$Data[$Original]['rev'] !== $BaseRev) {
+                return [self::ST_CONFLICT, '', null];
+            }
+            $Values += $Data[$Original]['v'];
+        }
+        $Key = $this->BuildKey($Values, $Schema);
+        if ($Key !== $Original && isset($Data[$Key])) {
+            return [self::ST_DUPLICATE, '', null];
+        }
+        $Entry = ['rev' => $Original !== null ? (int)$Data[$Original]['rev'] + 1 : 1, 'v' => $Values];
+        if ($Original !== null) {
+            unset($Data[$Original]);
+        }
+        $Data[$Key] = $Entry;
+        return [self::ST_OK, $Key, $Entry];
+    }
+
+    /** Fields by lower-case name. */
+    private function FieldsByName(array $Schema): array
+    {
+        $Fields = [];
+        foreach ($Schema['fields'] as $Field) {
+            $Fields[strtolower($Field['name'])] = $Field;
+        }
+        return $Fields;
+    }
+
+    /** Converts values by field name to values by field ID. Returns [values, status, message]. */
+    private function InputByID(array $Schema, array $Input): array
+    {
+        $Fields = $this->FieldsByName($Schema);
+        $Values = [];
+        foreach ($Input as $Name => $Value) {
+            $Field = $Fields[strtolower((string)$Name)] ?? null;
+            if ($Field === null) {
+                return [null, self::ST_UNKNOWN_FIELD, sprintf($this->Translate('Unknown field: %s'), $Name)];
+            }
+            $Values[$Field['id']] = $Value;
+        }
+        return [$Values, self::ST_OK, ''];
+    }
+
+    /** Internal key from key values by field name; other fields are ignored. Returns [key, status, message]. */
+    private function KeyFromNames(array $Schema, array $Input): array
+    {
+        $Lower = array_change_key_case($Input, CASE_LOWER);
+        $Values = [];
+        foreach ($Schema['fields'] as $Field) {
+            if ($Field['key'] === null) {
+                continue;
+            }
+            $Name = strtolower($Field['name']);
+            if (!array_key_exists($Name, $Lower)) {
+                return ['', self::ST_KEY_MISSING, sprintf($this->Translate('Key field missing: %s'), $Field['name'])];
+            }
+            [$Ok, $Value] = $this->CastValue($Field, $Lower[$Name]);
+            if (!$Ok) {
+                return ['', self::ST_INVALID, sprintf($this->Translate('Invalid value in field %s'), $Field['label'])];
+            }
+            if ($this->IsEmptyValue($Field, $Value)) {
+                return ['', self::ST_KEY_MISSING, sprintf($this->Translate('Key field missing: %s'), $Field['name'])];
+            }
+            $Values[$Field['id']] = $Value;
+        }
+        return [$this->BuildKey($Values, $Schema), self::ST_OK, ''];
+    }
+
+    private function RecordByName(array $Schema, array $Values): array
+    {
+        $Record = [];
+        foreach ($Schema['fields'] as $Field) {
+            $Record[$Field['name']] = $Values[$Field['id']] ?? null;
+        }
+        return $Record;
+    }
+
+    /** Result array of the script functions. */
+    private function Result(int $Status, array $Extra = [], string $Message = ''): array
+    {
+        if ($Message === '' && $Status !== self::ST_OK) {
+            $Message = $this->Translate([
+                self::ST_CONFIG    => 'The table configuration is invalid.',
+                self::ST_NOT_FOUND => 'Record not found.',
+                self::ST_DUPLICATE => 'A record with this key already exists.',
+                self::ST_LOCK      => 'Data store is locked.'
+            ][$Status] ?? 'Error');
+        }
+        return ['Status' => $Status, 'Message' => $Message] + $Extra;
     }
 
     private function IsEmptyValue(array $Field, mixed $Value): bool
@@ -889,11 +1233,26 @@ class DataTable extends IPSModuleStrict
         return [$Result, null];
     }
 
+    /** Compares as stored: JSON does not keep 99.0 apart from 99. */
+    /** Whether the editable fields of a record still have the values the tile started from. */
+    private function SameEditable(array $Schema, array $EditableIDs, array $Base, array $Stored): bool
+    {
+        $IDs = array_flip($EditableIDs);
+        $A = $B = [];
+        foreach ($Schema['fields'] as $Field) {
+            if (isset($IDs[$Field['id']])) {
+                $A[$Field['id']] = $this->CastValue($Field, $Base[$Field['id']] ?? null)[1];
+                $B[$Field['id']] = $this->CastValue($Field, $Stored[$Field['id']] ?? null)[1];
+            }
+        }
+        return $this->SameValues($A, $B);
+    }
+
     private function SameValues(array $A, array $B): bool
     {
         ksort($A);
         ksort($B);
-        return $A === $B;
+        return json_encode($A) === json_encode($B);
     }
 
     private function ShortText(mixed $Value): string
@@ -912,9 +1271,15 @@ class DataTable extends IPSModuleStrict
         return is_array($Data) ? $Data : [];
     }
 
+    /** Writes the data; DataRevision is increased only when something changed. */
     private function WriteData(array $Data): void
     {
-        $this->WriteAttributeString('Data', (string)json_encode((object)$Data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $Json = (string)json_encode((object)$Data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($Json === $this->ReadAttributeString('Data')) {
+            return;
+        }
+        $this->WriteAttributeString('Data', $Json);
+        $this->SetValue('DataRevision', $this->GetValue('DataRevision') + 1);
     }
 
     private function Lock(): bool
@@ -932,24 +1297,65 @@ class DataTable extends IPSModuleStrict
         return ['k' => $Key, 'rev' => (int)$Entry['rev'], 'v' => (object)$Entry['v']];
     }
 
-    private function BuildFullMessage(?string $Client): array
+    /**
+     * The complete state as messages of at most about CHUNK_BYTES: a 'full'
+     * message (schema, texts, first records, number of parts) followed by
+     * 'part' messages with further records. The tile applies them once all
+     * parts of the same 'seq' have arrived.
+     */
+    private function FullMessages(?string $Client): array
     {
         $Schema = $this->GetActiveSchema();
-        $Records = [];
+        $Chunks = [[]];
+        $Size = 0;
         if ($Schema !== null) {
             foreach ($this->ReadData() as $Key => $Entry) {
-                $Records[] = $this->RecordMessagePart((string)$Key, $Entry);
+                $Part = $this->RecordMessagePart((string)$Key, $Entry);
+                $Bytes = strlen((string)json_encode($Part, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                if ($Size > 0 && $Size + $Bytes > self::CHUNK_BYTES) {
+                    $Chunks[] = [];
+                    $Size = 0;
+                }
+                $Chunks[count($Chunks) - 1][] = $Part;
+                $Size += $Bytes;
             }
         }
+        $Seq = bin2hex(random_bytes(6));
         $Error = $this->ReadAttributeString('ConfigError');
-        return [
+        $Messages = [[
             't'       => 'full',
             'c'       => $Client,
+            'seq'     => $Seq,
+            'parts'   => count($Chunks),
             'schema'  => $Schema ?? ['title' => trim($this->ReadPropertyString('Title')), 'fields' => []],
-            'records' => $Records,
+            'records' => $Chunks[0],
             'error'   => $Error !== '' ? $Error : null,
             'texts'   => array_combine(self::TILE_TEXTS, array_map(fn(string $Text): string => $this->Translate($Text), self::TILE_TEXTS))
-        ];
+        ]];
+        for ($Index = 1; $Index < count($Chunks); $Index++) {
+            $Messages[] = ['t' => 'part', 'c' => $Client, 'seq' => $Seq, 'i' => $Index, 'records' => $Chunks[$Index]];
+        }
+        return $Messages;
+    }
+
+    private function SendFull(?string $Client): void
+    {
+        foreach ($this->FullMessages($Client) as $Message) {
+            $this->Broadcast($Message);
+        }
+    }
+
+    private function BroadcastSaved(?string $Original, string $Key, array $Entry, ?string $Client = null, int $RequestID = 0): void
+    {
+        $this->Broadcast([
+            't'   => 'changed',
+            'c'   => $Client,
+            'r'   => $RequestID,
+            'op'  => 'save',
+            'old' => $Original,
+            'key' => $Key,
+            'rec' => $this->RecordMessagePart($Key, $Entry)
+        ]);
     }
 
     private function SendError(string $Client, int $RequestID, string $Code, string $Message, ?array $Record = null): void

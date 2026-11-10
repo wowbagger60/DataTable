@@ -84,6 +84,8 @@ tbody tr{cursor:pointer}
 tbody tr:hover{background:var(--hover)}
 tbody tr.sel{background:var(--sel)}
 .list-footer{padding:7px 10px;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}
+tbody tr.more td{text-align:center;padding:10px;cursor:default}
+tbody tr.more:hover{background:transparent}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 
 /* ---- Detail ---------------------------------------------------------- */
@@ -102,6 +104,8 @@ tbody tr.sel{background:var(--sel)}
 .field.top>label{padding-top:7px}
 .field>label{color:var(--fg)}
 .field>label .req{color:var(--danger);margin-left:2px}
+.ro-val{padding:7px 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+.field.ro.top>label{padding-top:7px}
 .ctl{display:flex;align-items:center;gap:6px;min-width:0}
 .ctl input[type=text],.ctl input[type=number],.ctl input[type=date],.ctl select,.ctl textarea{
  width:100%;min-width:0;border:0;border-bottom:1px solid var(--line);background:transparent;padding:6px 2px;outline:none;border-radius:0}
@@ -197,8 +201,11 @@ tbody tr.sel{background:var(--sel)}
 // unsaved input live here in the browser, never in shared Symcon variables.
 const CLIENT=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36);
 const $=id=>document.getElementById(id);
+// The list shows PAGE rows at first; "Show more" adds PAGE rows.
+const PAGE=200;
 const S={schema:null,fields:[],byId:{},keyFields:[],tabs:[],records:new Map(),sort:[],filter:'',search:'',
- sel:null,draft:null,tab:null,notice:null,busy:false,schemaSig:''};
+ sel:null,draft:null,tab:null,notice:null,busy:false,schemaSig:'',
+ loading:null,queue:[],limit:PAGE};
 const pending=new Map();let reqNo=0;
 // Texts: English in the code, translated by the module (Symcon language) and sent with every full message.
 let TEXTS={};
@@ -215,10 +222,33 @@ function applyTexts(){
 function handleMessage(data){
  if(typeof data==='string'){try{data=JSON.parse(data)}catch(e){console.error(e);return}}
  if(!data||typeof data!=='object')return;
- if(data.t==='full'){if(data.c&&data.c!==CLIENT)return;applyFull(data)}
- else if(data.t==='changed')applyChanged(data);
+ if((data.t==='full'||data.t==='part')&&data.c&&data.c!==CLIENT)return;
+ if(data.t==='full')startFull(data);
+ else if(data.t==='part')addPart(data);
+ else if(data.t==='changed'){if(S.loading)S.queue.push(data);else applyChanged(data)}
  else if(data.t==='error'&&data.c===CLIENT)resolve(data);
 }
+// A large table arrives in several messages (same seq); it is applied when complete.
+// parts = -1: the table was too large to embed in the tile and is requested.
+function startFull(d){
+ if(d.texts&&typeof d.texts==='object'){TEXTS=d.texts;applyTexts()}
+ if(d.parts===-1){
+  S.loading={seq:null};showLoading();
+  setTimeout(()=>{try{requestAction('Request',JSON.stringify({c:CLIENT,r:0,op:'reload'}))}catch(e){console.error(e)}},0);
+  return;
+ }
+ if(!(d.parts>1)){S.loading=null;applyFull(d);flushQueue();return}
+ S.loading={seq:d.seq,parts:d.parts,head:d,chunks:[d.records||[]],got:1};showLoading();
+}
+function addPart(d){
+ const L=S.loading;if(!L||L.seq!==d.seq||L.chunks[d.i])return;
+ L.chunks[d.i]=d.records||[];L.got++;
+ if(L.got<L.parts)return;
+ const head=L.head;head.records=[].concat(...L.chunks);
+ S.loading=null;applyFull(head);flushQueue();
+}
+function flushQueue(){const q=S.queue;S.queue=[];for(const m of q)applyChanged(m)}
+function showLoading(){$('listFooter').textContent=T('Loading…');$('listEmpty').classList.add('hidden')}
 function resolve(msg){const f=pending.get(msg.r);if(f){pending.delete(msg.r);f(msg)}}
 
 function applyFull(d){
@@ -232,17 +262,32 @@ function applyFull(d){
  S.fields=S.schema.fields||[];
  S.byId={};for(const f of S.fields)S.byId[f.id]=f;
  S.keyFields=S.fields.filter(f=>f.key!=null).sort((a,b)=>a.key-b.key);
- S.tabs=[...new Set(S.fields.filter(f=>f.key==null).map(f=>f.tab||T('General')))];
+ S.tabs=[...new Set(S.fields.filter(f=>f.key==null&&inForm(f)).map(f=>f.tab||T('General')))];
  S.records=new Map((d.records||[]).map(r=>[r.k,{rev:r.rev,v:r.v}]));
  if(schemaChanged){
   S.sort=(S.schema.sort||[]).map(s=>typeof s==='string'?{id:s,dir:1}:{id:s.id,dir:s.dir<0?-1:1}).filter(s=>S.byId[s.id]);
   S.filter='';S.draft=null;S.sel=null;S.notice=null;S.tab=S.tabs[0]||null;setView('list');
- }else if(S.draft&&!S.draft.isNew&&!S.records.has(S.draft.orig)){
-  if(S.draft.dirty)S.notice={kind:'deleted'};else closeDetail();
+ }else if(S.draft&&!S.draft.isNew){
+  // The open record may have been changed or deleted meanwhile (e.g. by an import).
+  const r=S.records.get(S.draft.orig);
+  if(!r){if(S.draft.dirty)S.notice={kind:'deleted'};else closeDetail()}
+  else if(r.rev!==S.draft.rev&&!mergeOpen(r)){if(S.draft.dirty)S.notice={kind:'changed',key:S.draft.orig};else openRecord(S.draft.orig)}
  }
  renderAll();
 }
 
+// Takes over a newer version of the open record if only read-only or hidden
+// fields differ from what the draft started with; input is kept.
+function mergeOpen(r){
+ const d=S.draft;
+ if(JSON.stringify(editValues(r.v))!==d.base)return false;
+ d.rev=r.rev;
+ for(const f of S.fields)if(!editable(f)){
+  d.values[f.id]=r.v[f.id];
+  const e=document.getElementById('ro_'+f.id);if(e)e.textContent=roText(f,r.v[f.id]);
+ }
+ return true;
+}
 function applyChanged(d){
  if(d.old!=null)S.records.delete(d.old);
  if(d.rec)S.records.set(d.rec.k,{rev:d.rec.rev,v:d.rec.v});
@@ -252,7 +297,8 @@ function applyChanged(d){
  if(dr&&!dr.isNew&&d.old===dr.orig){
   if(d.op==='delete'){
    if(dr.dirty){S.notice={kind:'deleted'}}else{closeDetail();toast(T('Record was deleted by another client'))}
-  }else if(dr.dirty){S.notice={kind:'changed',key:d.key}}
+  }else if(d.rec&&d.key===dr.orig&&mergeOpen(d.rec)){/* only read-only or hidden fields changed */}
+  else if(dr.dirty){S.notice={kind:'changed',key:d.key}}
   else{openRecord(d.key);toast(T('Updated by another client'))}
  }
  renderList();renderSummary();renderNotice();
@@ -279,7 +325,7 @@ async function save(force){
   renderDetail();toast(T('Please fill in the required fields'),'error');return;
  }
  setBusy(true);
- const res=await send('save',{key:d.isNew?null:d.orig,rev:d.rev,values:d.values,force:!!force});
+ const res=await send('save',{key:d.isNew?null:d.orig,rev:d.rev,values:d.values,base:d.isNew?null:JSON.parse(d.base),force:!!force});
  setBusy(false);
  if(res.t==='changed'){S.notice=null;openRecord(res.key);toast(T('Saved'));return}
  handleError(res,'save');
@@ -324,6 +370,9 @@ function handleError(res,op){
 // ---------------------------------------------------------------------------
 // f.store is the storage type (string, integer, float, boolean); f.type the input (text, textarea, date, int, float, bool, select).
 function affix(f,s){return (f.prefix?f.prefix+' ':'')+s+(f.suffix?' '+f.suffix:'')}
+function editable(f){return f.key!=null||!f.form||f.form==='edit'}
+function inForm(f){return f.form!=='hidden'}
+function editValues(v){const o={};for(const f of S.fields)if(editable(f))o[f.id]=v[f.id];return o}
 function isBoolField(f){return f.store==='boolean'||(!f.store&&f.type==='bool')}
 function defaultValue(f){if(f.default!==undefined)return f.default;if(isBoolField(f))return false;if(f.type==='int'||f.type==='float'||f.store==='integer'||f.store==='float')return null;return ''}
 function isEmpty(f,v){if(isBoolField(f))return false;return v===null||v===undefined||String(v).trim()===''}
@@ -338,6 +387,7 @@ function validate(){
  const d=S.draft,bad=[];
  for(const f of S.fields){
   const v=d.values[f.id];
+  if(!editable(f))continue;
   if((f.required||f.key!=null)&&isEmpty(f,v))bad.push(f.id);
   else if((f.type==='int'||f.type==='float')&&v!==null&&((f.min!=null&&v<f.min)||(f.max!=null&&v>f.max)))bad.push(f.id);
  }
@@ -353,7 +403,7 @@ function errorText(f){
 function openRecord(key){
  const r=S.records.get(key);if(!r){closeDetail();return}
  S.sel=key;
- S.draft={orig:key,rev:r.rev,values:JSON.parse(JSON.stringify(r.v)),dirty:false,isNew:false,invalid:new Set(),copyOf:null};
+ S.draft={orig:key,rev:r.rev,values:JSON.parse(JSON.stringify(r.v)),base:JSON.stringify(editValues(r.v)),dirty:false,isNew:false,invalid:new Set(),copyOf:null};
  if(!S.tabs.includes(S.tab))S.tab=S.tabs[0]||null;
  S.notice=null;setView('detail');renderDetail();renderList();
 }
@@ -366,7 +416,8 @@ function newRecord(){
 function copyRecord(){
  const d=S.draft;if(!d)return;
  const title=keyTitle(d.values);
- S.sel=null;S.draft={orig:null,rev:0,values:JSON.parse(JSON.stringify(d.values)),dirty:true,isNew:true,invalid:new Set(),copyOf:title};
+ const values=JSON.parse(JSON.stringify(d.values));for(const f of S.fields)if(!editable(f))values[f.id]=defaultValue(f);
+ S.sel=null;S.draft={orig:null,rev:0,values,dirty:true,isNew:true,invalid:new Set(),copyOf:title};
  S.notice=null;renderDetail();renderList();focusFirstKey();toast(T('Copy created – adjust the key and save'));
 }
 function closeDetail(){S.draft=null;S.sel=null;S.notice=null;setView('list');renderDetail();renderList()}
@@ -428,7 +479,7 @@ function visibleRows(){
  const q=S.search.trim().toLowerCase(),cols=listColumns(),fid=S.schema&&S.schema.filter;
  let rows=[...S.records.entries()].map(([k,r])=>({k,v:r.v}));
  if(S.filter&&fid)rows=rows.filter(r=>String(r.v[fid])===S.filter);
- if(q)rows=rows.filter(r=>cols.some(f=>fmt(f,r.v[f.id]).toLowerCase().includes(q))||S.fields.some(f=>(f.type==='text'||f.type==='textarea')&&String(r.v[f.id]||'').toLowerCase().includes(q)));
+ if(q)rows=rows.filter(r=>cols.some(f=>fmt(f,r.v[f.id]).toLowerCase().includes(q))||S.fields.some(f=>inForm(f)&&(f.type==='text'||f.type==='textarea')&&String(r.v[f.id]||'').toLowerCase().includes(q)));
  const sorts=S.sort.length?S.sort:S.keyFields.map(f=>({id:f.id,dir:1}));
  rows.sort((a,b)=>{for(const s of sorts){const c=cmp(S.byId[s.id],a.v[s.id],b.v[s.id]);if(c)return c*s.dir}return collator.compare(a.k,b.k)});
  return rows;
@@ -463,10 +514,14 @@ function renderList(){
   const arrow=prim&&prim.id===f.id?(prim.dir>0?'▲':'▼'):'';
   return el('th',{class:num?'num':f.type==='bool'?'bool':'',onclick:()=>sortBy(f.id),title:T('Sort by {0}',f.listLabel||f.label)},(f.listLabel||f.label)+' ',el('span',{class:'arrow',text:arrow}));
  })));
- $('tbody').replaceChildren(...rows.map(r=>el('tr',{
+ const selIndex=S.sel==null?-1:rows.findIndex(r=>r.k===S.sel);
+ if(selIndex>=S.limit)S.limit=Math.ceil((selIndex+1)/PAGE)*PAGE;
+ const more=rows.length-S.limit;
+ $('tbody').replaceChildren(...rows.slice(0,S.limit).map(r=>el('tr',{
    class:r.k===S.sel?'sel':'','data-key':r.k,
    onclick:()=>{if(r.k!==S.sel||!S.draft)guard(()=>openRecord(r.k));else setView('detail')}
-  },cols.map(f=>el('td',{class:f.type==='int'||f.type==='float'?'num':f.type==='bool'?'bool':'',text:fmt(f,r.v[f.id]),title:f.type==='textarea'||f.type==='text'?String(r.v[f.id]??''):null})))));
+  },cols.map(f=>el('td',{class:f.type==='int'||f.type==='float'?'num':f.type==='bool'?'bool':'',text:fmt(f,r.v[f.id]),title:f.type==='textarea'||f.type==='text'?String(r.v[f.id]??''):null})))),
+  more>0?el('tr',{class:'more'},el('td',{colspan:cols.length},el('button',{type:'button',class:'btn',text:T('Show {0} more',Math.min(PAGE,more)),onclick:()=>{S.limit+=PAGE;renderList()}}))):'');
  $('listEmpty').classList.toggle('hidden',rows.length>0);
  const total=S.records.size;
  $('listFooter').textContent=rows.length===total?T('{0} records',total):T('{0} of {1} records',rows.length,total);
@@ -477,7 +532,7 @@ function sortBy(id){
  const p=S.sort[0];
  if(p&&p.id===id)p.dir=-p.dir;
  else S.sort=[{id,dir:1},...S.sort.filter(s=>s.id!==id)].slice(0,3);
- renderList();
+ S.limit=PAGE;renderList();
 }
 
 function renderDetail(){
@@ -491,7 +546,7 @@ function renderDetail(){
 
  const body=[];
  body.push(el('div',{class:'key-area'},S.keyFields.map(fieldRow)));
- const fields=S.fields.filter(f=>f.key==null);
+ const fields=S.fields.filter(f=>f.key==null&&inForm(f));
  if(S.tabs.length>1){
   body.push(el('div',{class:'tabs',role:'tablist'},S.tabs.map(t=>{
    const err=fields.some(f=>(f.tab||T('General'))===t&&d.invalid.has(f.id));
@@ -507,8 +562,15 @@ function renderDetail(){
  updateNav();
 }
 
+function roText(f,v){
+ if(isBoolField(f)&&!(f.options&&f.options.length))return v?T('Yes'):T('No');
+ if(isEmpty(f,v))return '—';
+ return f.type==='textarea'?String(v):fmt(f,v);
+}
 function fieldRow(f,index){
  const d=S.draft,v=d.values[f.id],id='f_'+f.id;
+ if(!editable(f))return el('div',{class:'field ro'+(f.separator&&index>0?' sep':'')+(f.type==='textarea'?' top':'')},
+  el('label',{},f.label),el('div',{class:'ctl'},el('div',{class:'ro-val',id:'ro_'+f.id,text:roText(f,v)})));
  const set=val=>{
   d.values[f.id]=val;d.dirty=true;
   if(d.invalid.delete(f.id)){row.classList.remove('invalid');const e=row.querySelector('.err');if(e)e.remove()}
@@ -691,8 +753,10 @@ $('btnDiscard').addEventListener('click',()=>{
 $('btnBack').addEventListener('click',()=>{if(S.draft&&S.draft.isNew)guard(closeDetail);else setView('list')});
 $('btnPrev').addEventListener('click',()=>step(-1));
 $('btnNext').addEventListener('click',()=>step(1));
-$('filter').addEventListener('change',e=>{S.filter=e.target.value;renderList();updateNav()});
-$('search').addEventListener('input',e=>{S.search=e.target.value;renderList();updateNav()});
+$('filter').addEventListener('change',e=>{S.filter=e.target.value;S.limit=PAGE;renderList();updateNav()});
+// Searching a large table takes a moment: wait for a short typing pause.
+let searchTimer=null;
+$('search').addEventListener('input',e=>{const v=e.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{S.search=v;S.limit=PAGE;renderList();updateNav()},S.records.size>1000?250:0)});
 $('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeDialog()});
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape'&&!$('overlay').classList.contains('hidden')){closeDialog();return}
