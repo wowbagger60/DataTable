@@ -66,10 +66,10 @@ renamed without losing data.
 | In list | The field is a column in the list. Without any list field, the key fields are shown. |
 | Column title in list | Shorter title for the list column. Empty: the label. |
 
-### Advanced settings
+### Type-specific settings
 
-The edit dialog first shows the general settings. «Show advanced settings» or a
-change of type shows the settings that apply to the type:
+The edit dialog shows only the settings that apply to the type of the field; a
+change of type, display or options in the dialog adjusts them:
 
 | Setting | Applies to |
 |---|---|
@@ -205,8 +205,8 @@ are `null`.
 `Import()` is an atomic merge: new records are added, existing records with the
 same key get the given fields, identical records are left alone. Records not
 contained in the import are never deleted. If one record is invalid, nothing is
-imported and `Message` names the record. The `Records` of `DATAT_Export()` and
-of `RECM_Export()` can be imported directly, provided the field names match.
+imported and `Message` names the record. The `Records` of `DATAT_Export()` can
+be imported directly, provided the field names match.
 
 Every change is shown immediately in all open tiles.
 
@@ -243,4 +243,4 @@ accepted: PayPal to ueli.schweizer@cassanis.fr
 
 ## 10. Changelog
 
-**1.2 Build 1:** Initial release as DataTable, successor of RecordManager.
+**1.2 Build 2:** Initial release.

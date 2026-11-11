@@ -64,9 +64,7 @@
             "Case-sensitive key": "Schlüssel unterscheidet Gross/Klein",
             "Lines": "Zeilen",
             "Required": "Pflicht",
-            "Show advanced settings": "Erweiterte Einstellungen anzeigen",
             "Sort order: unknown field %s.": "Sortierung: unbekanntes Feld %s.",
-            "The edit dialog shows the general settings; \"Show advanced settings\" or choosing a type adds the settings that apply to the type. To move a field between key and data fields, delete it in one list and add it with the same name in the other: its values are kept.": "Der Bearbeiten-Dialog zeigt die allgemeinen Einstellungen; „Erweiterte Einstellungen anzeigen“ oder die Wahl eines Typs blendet die Einstellungen ein, die zum Typ passen. Um ein Feld zwischen Schlüssel- und Datenfeldern zu verschieben, in der einen Liste löschen und in der anderen mit demselben Namen neu anlegen: Seine Werte bleiben erhalten.",
             "Name": "Name",
             "Prefix": "Präfix",
             "Suffix": "Suffix",
@@ -141,7 +139,8 @@
             "Record %d: ": "Datensatz %d: ",
             "Data revision": "Datenrevision",
             "Loading…": "Wird geladen…",
-            "Show {0} more": "{0} weitere anzeigen"
+            "Show {0} more": "{0} weitere anzeigen",
+            "The edit dialog shows the settings that apply to the type. To move a field between key and data fields, delete it in one list and add it with the same name in the other: its values are kept.": "Der Bearbeitungsdialog zeigt die Einstellungen, die zum Typ passen. Um ein Feld zwischen Schlüssel- und Datenfeldern zu verschieben, in der einen Liste löschen und mit demselben Namen in der anderen hinzufügen: Seine Werte bleiben erhalten."
         }
     }
 }

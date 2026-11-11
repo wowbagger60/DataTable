@@ -13,13 +13,14 @@
  * shown single-line, multi-line or as date. String, Integer and Boolean
  * fields with options become a selection.
  *
- * Configuration form: fields are edited in the standard edit dialog of the
- * two lists. Symcon has no event when the dialog opens, so the dialog starts
- * with the general settings only; the checkbox "Show advanced settings" or a
- * change of type/display/options shows the settings that apply to the type
- * (RequestAction 'Dialog' -> UpdateFormField). Settings that do not fit the
- * type are ignored. Symcon only keeps list columns that have an edit
- * element, so ID has a disabled one and Details a hidden one.
+ * Configuration form: the edit dialog of the two lists is built by the list
+ * parameter "form" (PHP code run by Symcon when the dialog opens, with the
+ * row in $KeyFields / $DataFields), so it shows only the settings that apply
+ * to the type. A change of type/display/options in the open dialog follows
+ * via RequestAction 'Dialog' -> UpdateFormField. Settings that do not fit
+ * the type are ignored. Symcon only stores list columns that have their own
+ * edit element, so every column keeps one (Details a hidden one), although
+ * the dialog comes from "form".
  *
  * Protocol between tile and module (all messages are JSON strings):
  *   Tile -> module: requestAction('Request', {c, r, op, ...})
@@ -38,7 +39,7 @@ class DataTable extends IPSModuleStrict
     private const TYPES = ['string', 'integer', 'float', 'boolean'];
     private const FORMATS = ['line', 'multiline', 'date'];
 
-    // Result status of the script functions (numbering as in RecordManager).
+    // Result status of the script functions.
     private const ST_OK = 0;
     private const ST_CONFIG = 1;
     private const ST_KEY_MISSING = 2;
@@ -61,7 +62,7 @@ class DataTable extends IPSModuleStrict
         'ID' => '', 'Name' => '', 'Label' => '', 'Type' => 'string', 'Format' => 'line', 'Details' => '',
         'List' => false, 'Required' => false, 'Tab' => '', 'Separator' => false, 'Form' => 'edit', 'ListLabel' => '',
         'Default' => '', 'Options' => '', 'Prefix' => '', 'Suffix' => '', 'Digits' => 2, 'Min' => '', 'Max' => '', 'Rows' => 3,
-        'CaseSensitive' => false, 'Filter' => false, 'Advanced' => false
+        'CaseSensitive' => false, 'Filter' => false
     ];
 
     /** Texts of the tile (English); sent translated with every full message. */
@@ -122,11 +123,6 @@ class DataTable extends IPSModuleStrict
                     $Row['Details'] = $Details;
                     $Changed = true;
                 }
-                // The dialog checkbox only reveals settings; it is not part of the definition.
-                if (!empty($Row['Advanced'])) {
-                    $Row['Advanced'] = false;
-                    $Changed = true;
-                }
             }
             unset($Row);
         }
@@ -183,29 +179,10 @@ class DataTable extends IPSModuleStrict
             array_unshift($Form['elements'], ['type' => 'Label', 'caption' => '⚠ ' . $Error, 'bold' => true]);
         }
 
-        // Dialog: type dependent settings start hidden. The checkbox "Show
-        // advanced settings" shows the ones that apply to the type (and follows
-        // changes of type, display and options while it is set). Symcon keeps
-        // that visibility when the dialog is opened again, so closing the dialog
-        // with OK (onEdit/onAdd) hides them again. Cancel has no event.
         foreach ($Form['elements'] as &$Element) {
-            if (!in_array($Element['name'] ?? '', ['KeyFields', 'DataFields'], true)) {
-                continue;
+            if (in_array($Element['name'] ?? '', ['KeyFields', 'DataFields'], true)) {
+                $Element['form'] = $this->DialogCode($Element['name'], $Element['columns']);
             }
-            $List = $Element['name'] === 'KeyFields' ? 'keys' : 'data';
-            $Script = "IPS_RequestAction(\$id, 'Dialog', json_encode(['list' => '" . $List . "', "
-                . "'type' => isset(\$Type) ? \$Type : '', 'format' => isset(\$Format) ? \$Format : '', "
-                . "'options' => isset(\$Options) ? \$Options : '', 'advanced' => isset(\$Advanced) ? (bool)\$Advanced : false]));";
-            // Tested: onEdit fires when the dialog is closed with OK (not on cancel).
-            foreach (['onEdit', 'onAdd'] as $Event) {
-                $Element[$Event] = "IPS_RequestAction(\$id, 'Dialog', json_encode(['list' => '" . $List . "', 'reset' => '" . $Event . "']));";
-            }
-            foreach ($Element['columns'] as &$Column) {
-                if (in_array($Column['name'], ['Type', 'Format', 'Options', 'Advanced'], true) && isset($Column['edit'])) {
-                    $Column['edit']['onChange'] = $Script;
-                }
-            }
-            unset($Column);
         }
         unset($Element);
 
@@ -404,7 +381,7 @@ class DataTable extends IPSModuleStrict
      * Atomic merge: new records are added, existing ones (same key) get the
      * given fields, identical ones are left alone. Records not contained are
      * never deleted. Either all records are imported or none.
-     * Accepts the Records of Export() here and of RECM_Export().
+     * Accepts the Records of Export().
      * Result: Status, Message, Added, Updated, Unchanged.
      */
     public function Import(array $Records): array
@@ -593,6 +570,65 @@ class DataTable extends IPSModuleStrict
     // Configuration form: edit dialog of the field lists
     // ---------------------------------------------------------------------
 
+    /**
+     * PHP code for the list parameter "form": Symcon runs it when the edit
+     * dialog opens, with the row in $<list name>. It returns the edit
+     * elements of the columns (translated here) with the visibility that
+     * fits the row; the visibility of every combination is precomputed.
+     */
+    private function DialogCode(string $List, array $Columns): string
+    {
+        $IsKey = $List === 'KeyFields';
+        $Elements = [];
+        foreach ($Columns as $Column) {
+            if (!isset($Column['edit']) || $Column['name'] === 'Details') {
+                continue;
+            }
+            $Element = $Column['edit'];
+            unset($Element['visible']);
+            $Element['name'] = $Column['name'];
+            $Element['caption'] = $this->Translate($Column['caption']);
+            if (isset($Element['options'])) {
+                foreach ($Element['options'] as &$Option) {
+                    $Option['caption'] = $this->Translate($Option['caption']);
+                }
+                unset($Option);
+            }
+            $Elements[] = $Element;
+        }
+        $Table = [];
+        foreach (self::TYPES as $Type) {
+            foreach (self::FORMATS as $Format) {
+                foreach ([0, 1] as $HasOptions) {
+                    $Table[$Type][$Format][$HasOptions] = $this->DialogVisibility($IsKey, $Type, $Format, (bool)$HasOptions);
+                }
+            }
+        }
+        // onChange of type, display and options; values not passed by Symcon fall back to the row.
+        $Script = "IPS_RequestAction(\$id, 'Dialog', json_encode(['list' => '" . ($IsKey ? 'keys' : 'data') . "', "
+            . "'type' => isset(\$Type) ? \$Type : %s, 'format' => isset(\$Format) ? \$Format : %s, "
+            . "'options' => isset(\$Options) ? \$Options : %s]));";
+
+        // Symcon passes every property as variable; the one named like the list
+        // holds the row. It is no plain array (is_array() fails, tested); array
+        // access worked in the test, an object without it is cast.
+        return '$R = isset($' . $List . ') ? $' . $List . ' : [];' . "\n"
+            . 'if (is_object($R) && !($R instanceof ArrayAccess)) { $R = (array)$R; }' . "\n"
+            . '$T = isset($R[\'Type\']) ? (string)$R[\'Type\'] : \'string\';' . "\n"
+            . '$F = isset($R[\'Format\']) ? (string)$R[\'Format\'] : \'line\';' . "\n"
+            . '$O = isset($R[\'Options\']) ? (string)$R[\'Options\'] : \'\';' . "\n"
+            . '$Table = ' . var_export($Table, true) . ';' . "\n"
+            . '$Types = isset($Table[$T]) ? $Table[$T] : $Table[\'string\'];' . "\n"
+            . '$V = (isset($Types[$F]) ? $Types[$F] : $Types[\'line\'])[trim($O) !== \'\' ? 1 : 0];' . "\n"
+            . '$Script = sprintf(' . var_export($Script, true) . ', var_export($T, true), var_export($F, true), var_export($O, true));' . "\n"
+            . '$E = ' . var_export($Elements, true) . ';' . "\n"
+            . 'foreach ($E as &$X) {' . "\n"
+            . '    if (isset($V[$X[\'name\']])) { $X[\'visible\'] = $V[$X[\'name\']]; }' . "\n"
+            . '    if (in_array($X[\'name\'], [\'Type\', \'Format\', \'Options\'], true)) { $X[\'onChange\'] = $Script; }' . "\n"
+            . '}' . "\n"
+            . 'return $E;';
+    }
+
     /** Shows only the dialog settings that apply to the chosen type. */
     private function HandleDialogChange(string $Json): void
     {
@@ -604,14 +640,8 @@ class DataTable extends IPSModuleStrict
         $Type = in_array($Request['type'] ?? '', self::TYPES, true) ? (string)$Request['type'] : 'string';
         $Format = (string)($Request['format'] ?? '');
         $HasOptions = trim((string)($Request['options'] ?? '')) !== '';
-        $Reset = isset($Request['reset']);
-        if ($Reset) {
-            $this->SendDebug('Dialog', 'List event ' . (string)$Request['reset'] . ' (' . ($IsKey ? 'KeyFields' : 'DataFields') . ')', 0);
-        }
-        $Show = !$Reset && !empty($Request['advanced']);
         foreach ($this->DialogVisibility($IsKey, $Type, $Format, $HasOptions) as $Column => $Visible) {
-            // Required is a general setting; only Boolean fields hide it.
-            $this->UpdateFormField($Column, 'visible', $Column === 'Required' ? ($Reset || $Visible) : ($Show && $Visible));
+            $this->UpdateFormField($Column, 'visible', $Visible);
         }
     }
 

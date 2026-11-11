@@ -68,11 +68,10 @@ Feld lässt sich deshalb umbenennen, ohne dass Daten verloren gehen.
 | In Liste | Das Feld ist eine Spalte der Liste. Ohne Listenfeld werden die Schlüsselfelder gezeigt. |
 | Spaltentitel in der Liste | Kürzerer Titel für die Listenspalte. Leer: die Beschriftung. |
 
-### Erweiterte Einstellungen
+### Typabhängige Einstellungen
 
-Der Bearbeiten-Dialog zeigt zuerst die allgemeinen Einstellungen. «Erweiterte
-Einstellungen anzeigen» oder ein Wechsel des Typs blendet die Einstellungen
-ein, die zum Typ passen:
+Der Bearbeiten-Dialog zeigt nur die Einstellungen, die zum Typ des Feldes
+passen; ein Wechsel von Typ, Darstellung oder Optionen im Dialog passt sie an:
 
 | Einstellung | Gilt für |
 |---|---|
@@ -216,8 +215,8 @@ Kachel. Die Werte haben den Typ des Feldes; ein Datum ist ein String
 mit gleichem Schlüssel erhalten die übergebenen Felder, identische bleiben
 unverändert. Nicht enthaltene Datensätze werden nie gelöscht. Ist ein Datensatz
 ungültig, wird nichts importiert, und `Message` nennt den Datensatz. Die
-`Records` von `DATAT_Export()` und von `RECM_Export()` lassen sich direkt
-importieren, sofern die Feldnamen übereinstimmen.
+`Records` von `DATAT_Export()` lassen sich direkt importieren, sofern die
+Feldnamen übereinstimmen.
 
 Jede Änderung erscheint sofort in allen offenen Kacheln.
 
@@ -256,4 +255,4 @@ gerne angenommen: PayPal an ueli.schweizer@cassanis.fr
 
 ## 10. Änderungen
 
-**1.2 Build 1:** Erstveröffentlichung als DataTable, Nachfolger von RecordManager.
+**1.2 Build 2:** Erstveröffentlichung.

@@ -124,16 +124,6 @@
                     "visible": false
                 },
                 {
-                    "caption": "Show advanced settings",
-                    "name": "Advanced",
-                    "width": "80px",
-                    "add": false,
-                    "visible": false,
-                    "edit": {
-                        "type": "CheckBox"
-                    }
-                },
-                {
                     "caption": "Display",
                     "name": "Format",
                     "width": "80px",
@@ -349,9 +339,18 @@
                     "edit": {
                         "type": "Select",
                         "options": [
-                            { "caption": "Editable", "value": "edit" },
-                            { "caption": "Read only", "value": "read" },
-                            { "caption": "Hidden", "value": "hidden" }
+                            {
+                                "caption": "Editable",
+                                "value": "edit"
+                            },
+                            {
+                                "caption": "Read only",
+                                "value": "read"
+                            },
+                            {
+                                "caption": "Hidden",
+                                "value": "hidden"
+                            }
                         ]
                     },
                     "visible": false
@@ -393,16 +392,6 @@
                         "type": "ValidationTextBox"
                     },
                     "visible": false
-                },
-                {
-                    "caption": "Show advanced settings",
-                    "name": "Advanced",
-                    "width": "80px",
-                    "add": false,
-                    "visible": false,
-                    "edit": {
-                        "type": "CheckBox"
-                    }
                 },
                 {
                     "caption": "Display",
@@ -525,7 +514,7 @@
         },
         {
             "type": "Label",
-            "caption": "The edit dialog shows the general settings; \"Show advanced settings\" or choosing a type adds the settings that apply to the type. To move a field between key and data fields, delete it in one list and add it with the same name in the other: its values are kept."
+            "caption": "The edit dialog shows the settings that apply to the type. To move a field between key and data fields, delete it in one list and add it with the same name in the other: its values are kept."
         }
     ],
     "actions": [],
